@@ -30,6 +30,7 @@ public:
 
     ~SimpleVector() {
         size_ = 0;
+        capacity_ = 0;
     }
     
     SimpleVector(const SimpleVectorProxy& p_obj) {
@@ -60,9 +61,9 @@ public:
     size_t GetSize() const noexcept {
         return size_;
     }
-
+    
     size_t GetCapacity() const noexcept {
-        return data_.GetCapacity();
+        return capacity_;
     }
 
     bool IsEmpty() const noexcept {
@@ -267,6 +268,7 @@ public:
     void swap(SimpleVector& other) noexcept {
         data_.swap(other.data_);
         std::swap(size_, other.size_);
+        std::swap(capacity_, other.capacity_);
     }
     
     void Reserve(size_t size) {
@@ -284,9 +286,9 @@ public:
 private:
     void ResizeIfNeeded() {
         size_t sz = GetSize();
-        if (sz == data_.GetCapacity()) {
+        if (sz == GetCapacity()) {
             Initialize(
-                data_.GetCapacity() ? 2 * sz : 1,
+                GetCapacity() ? 2 * sz : 1,
                 [b_ = this->begin(), e_ = this->end()](Type* begin, Type* end) {
                     if (begin < end) {
                         std::copy(
@@ -305,10 +307,10 @@ private:
     void Initialize(size_t size, FillFunc fill) {
         if (size > 0) {
             try {
-                ArrayPtr<Type> tmp(size);
-                fill(tmp.Get(), tmp.Get() + size); 
+                ArrayPtr<Type> tmp(size, fill);
                 data_.swap(tmp);
                 size_ = size;
+                capacity_ = size;
             } catch (std::bad_alloc&) {
                 throw;
             }
@@ -318,6 +320,7 @@ private:
 private:
     ArrayPtr<Type> data_;
     size_t size_ = 0;
+    size_t capacity_ = 0;
 };
 
 template <typename Type>
