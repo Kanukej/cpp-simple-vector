@@ -20,6 +20,8 @@ private:
     const size_t size_;
 };
 
+SimpleVectorProxy Reserve(size_t sz);
+
 template <typename Type>
 class SimpleVector {
 public:
@@ -37,25 +39,24 @@ public:
         Reserve(p_obj.GetSize());
     }
 
-    explicit SimpleVector(size_t size) {
-        Initialize(size, [](Type* begin, Type* end) {
-            std::fill(begin, end, Type {});
-        });
+    explicit SimpleVector(size_t size) : SimpleVector(size, Type {})  {
+        //
     }
 
     SimpleVector(size_t size, const Type& value) {
-        Initialize(size, [&value](Type* begin, Type* end) {
-            std::fill(begin, end, value);
-        });
+        SimpleVector tmp;
+        tmp.Reserve(size);
+        tmp.size_ = size;
+        std::fill(tmp.begin(), tmp.end(), value);
+        swap(tmp);
     }
 
     SimpleVector(std::initializer_list<Type> init) {
-        Initialize(init.size(), [&init](Type* begin, Type* end) {
-            auto valueIt = std::make_move_iterator(init.begin());
-            for (Type* it = begin; it != end; ++it, ++valueIt) {
-                *it = *valueIt;
-            }
-        });
+        SimpleVector tmp;
+        tmp.Reserve(init.size());
+        tmp.size_ = init.size();
+        std::move(init.begin(), init.end(), tmp.begin());
+        swap(tmp);
     }
 
     size_t GetSize() const noexcept {
@@ -104,27 +105,24 @@ public:
         } else if (new_size <= GetCapacity()) {
             try {
                 std::for_each(end(), begin() + new_size, [](Type& t) {
-                    std::exchange(t, Type {});
+                    t = Type {};
                 });
             } catch (std::bad_alloc&) {
                 throw;
             }
             size_ = new_size;
         } else {
-            Initialize(
-                new_size > GetCapacity() * 2 ? new_size : GetCapacity() * 2,
-                [new_size, b_ = this->begin(), e_ = this->end()](Type* begin, Type* end) {
-                    end = std::copy(
-                        std::make_move_iterator(b_),
-                        std::make_move_iterator(e_), 
-                        begin
-                    );
-                    std::for_each(end, begin + new_size, [](Type& t) {
-                        std::exchange(t, Type {});
-                    });
+            SimpleVector tmp;
+            tmp.Reserve(new_size > GetCapacity() * 2 ? new_size : GetCapacity() * 2);
+            tmp.size_ = tmp.GetCapacity();
+            std::for_each(
+                std::move(begin(), end(), tmp.begin()),
+                tmp.end(),
+                [](Type& t) {
+                    t = Type {};
                 }
             );
-            Resize(new_size);
+            swap(tmp);
         }
     }
 
@@ -157,13 +155,10 @@ public:
             return;
         }
         SimpleVector tmp;
-        tmp.Initialize(other.GetSize(), [&other](Type* begin, Type* end) {
-            auto valueIt = other.begin();
-            for (Type* it = begin; it != end; ++it, ++valueIt) {
-                *it = *valueIt;
-            }
-        });
-        this->swap(tmp);
+        tmp.Reserve(other.GetCapacity());
+        tmp.size_ = other.GetSize();
+        std::copy(other.begin(), other.end(), tmp.begin());
+        swap(tmp);
     }
     
     SimpleVector(SimpleVector&& other) {
@@ -172,6 +167,7 @@ public:
         }
         this->data_ = std::exchange(other.data_, {});
         this->size_ = std::exchange(other.size_, 0);
+        this->capacity_ = std::exchange(other.capacity_, 0);
     }
 
     SimpleVector& operator=(const SimpleVector& rhs) {
@@ -179,13 +175,10 @@ public:
             return *this;
         }
         SimpleVector tmp;
-        tmp.Initialize(rhs.GetSize(), [&rhs](Type* begin, Type* end) {
-            auto valueIt = rhs.cbegin();
-            for (Type* it = begin; it != end; ++it, ++valueIt) {
-                *it = *valueIt;
-            }
-        });
-        this->swap(tmp);
+        tmp.Reserve(rhs.GetCapacity());
+        tmp.size_ = rhs.GetSize();
+        std::copy(rhs.cbegin(), rhs.cend(), tmp.begin());
+        swap(tmp);
         return *this;
     }
     
@@ -195,19 +188,36 @@ public:
         }
         this->data_ = std::exchange(other.data_, {});
         this->size_ = std::exchange(other.size_, 0);
+        this->capacity_ = std::exchange(other.capacity_, 0);
         return *this;
     }
     
     void PushBack(const Type& item) {
-        ResizeIfNeeded();
-        data_[size_] = std::move(item);
-        ++size_;
+        if (GetSize() == GetCapacity()) {
+            SimpleVector tmp;
+            tmp.Reserve(GetCapacity() ? 2 * GetSize() : 1);
+            tmp.size_ = GetSize();
+            std::copy(cbegin(), cend(), tmp.begin());
+            tmp.PushBack(item);
+            swap(tmp);
+        } else {
+            data_[size_] = item;
+            ++size_;
+        }
     }
     
-    void PushBack(Type&& item) {
-        ResizeIfNeeded();
-        data_[size_] = std::move(item);
-        ++size_;
+    void PushBack(Type&& item) {    
+        if (GetSize() == GetCapacity()) {
+            SimpleVector tmp;
+            tmp.Reserve(GetCapacity() ? 2 * GetSize() : 1);
+            tmp.size_ = GetSize();
+            std::move(begin(), end(), tmp.begin());
+            tmp.PushBack(std::move(item));
+            swap(tmp);
+        } else {
+            data_[size_] = std::move(item);
+            ++size_;
+        }
     }
    
     void PopBack() noexcept {
@@ -217,50 +227,44 @@ public:
     }
     
     Iterator Insert(ConstIterator pos, const Type& value) {
-        Insert(Iterator(pos), Type { value });
-    }
-    
-    Iterator Insert(Iterator pos, Type&& value) {
-        size_t sz = GetSize();
-        Iterator it = begin();
-        if (sz == GetCapacity()) {
-            Initialize(
-                GetCapacity() ? 2 * sz : 1,
-                [&it, &sz, p_ = pos, e_ = end(), b_ = begin()](Type* begin, Type* end) {
-                    if (begin < end) {
-                        std::copy(
-                            std::make_move_iterator(b_),
-                            std::make_move_iterator(p_), 
-                            begin
-                        );
-                        it = std::copy_backward(
-                            std::make_move_iterator(p_), 
-                            std::make_move_iterator(e_), 
-                            begin + sz + 1
-                        );
-                    }
-                }
-            );
-            size_ = sz + 1;
+        Iterator ans;
+        if (GetSize() == GetCapacity()) {
+            SimpleVector tmp;
+            tmp.Reserve(GetCapacity() ? 2 * GetSize() : 1);
+            tmp.size_ = GetSize() + 1;
+            std::copy(cbegin(), pos, tmp.begin());
+            ans = std::copy_backward(pos, end(), tmp.end());
+            *(--ans) = value;
+            swap(tmp);
         } else {
-            it = std::copy_backward(
-                std::make_move_iterator(pos),
-                std::make_move_iterator(end()),
-                end() + 1
-            );
+            ans = std::copy_backward(pos, end(), end() + 1);
+            *(--ans) = value;
             ++size_;
         }
-        *(--it) = std::exchange(value, {});
-        return it;
+        return ans;
+    }
+    
+    Iterator Insert(Iterator pos, Type&& value) {    
+        Iterator ans;
+        if (GetSize() == GetCapacity()) {
+            SimpleVector tmp;
+            tmp.Reserve(GetCapacity() ? 2 * GetSize() : 1);
+            tmp.size_ = GetSize() + 1;
+            std::move(begin(), pos, tmp.begin());
+            ans = std::move_backward(pos, end(), tmp.end());
+            *(--ans) = std::move(value);
+            swap(tmp);
+        } else {
+            ans = std::move_backward(pos, end(), end() + 1);
+            *(--ans) = std::move(value);
+            ++size_;
+        }
+        return ans;
     }
     
     Iterator Erase(ConstIterator pos) {
         size_t id = pos - begin();
-        std::copy(
-            std::make_move_iterator(begin() + id + 1),
-            std::make_move_iterator(end()), 
-            begin() + id
-        );
+        std::move(begin() + id + 1, end(), begin() + id);
         --size_;
         return begin() + id;
     }
@@ -272,48 +276,10 @@ public:
     }
     
     void Reserve(size_t size) {
-        size_t sz = GetSize();
         if (size > GetCapacity()) {
-            Initialize(size, [b_ = cbegin(), e_ = cend()](Type* begin, Type* end) {
-                if (begin < end) {
-                    std::copy(b_, e_, begin);            
-                }
-            });
-            size_ = sz;
-        }
-    }
-    
-private:
-    void ResizeIfNeeded() {
-        size_t sz = GetSize();
-        if (sz == GetCapacity()) {
-            Initialize(
-                GetCapacity() ? 2 * sz : 1,
-                [b_ = this->begin(), e_ = this->end()](Type* begin, Type* end) {
-                    if (begin < end) {
-                        std::copy(
-                            std::make_move_iterator(b_),
-                            std::make_move_iterator(e_),
-                            begin
-                        );
-                    }
-                }
-            );
-            size_ = sz;
-        }
-    }
-    
-    template <typename FillFunc>
-    void Initialize(size_t size, FillFunc fill) {
-        if (size > 0) {
-            try {
-                ArrayPtr<Type> tmp(size, fill);
-                data_.swap(tmp);
-                size_ = size;
-                capacity_ = size;
-            } catch (std::bad_alloc&) {
-                throw;
-            }
+            ArrayPtr<Type> tmp(size);
+            data_.swap(tmp);
+            capacity_ = size;
         }
     }
 
