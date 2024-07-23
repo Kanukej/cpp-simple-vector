@@ -43,20 +43,12 @@ public:
         //
     }
 
-    SimpleVector(size_t size, const Type& value) {
-        SimpleVector tmp;
-        tmp.Reserve(size);
-        tmp.size_ = size;
-        std::fill(tmp.begin(), tmp.end(), value);
-        swap(tmp);
+    SimpleVector(size_t size, const Type& value) : data_(size), size_(size), capacity_(size) {
+        std::fill(begin(), end(), value);
     }
 
-    SimpleVector(std::initializer_list<Type> init) {
-        SimpleVector tmp;
-        tmp.Reserve(init.size());
-        tmp.size_ = init.size();
-        std::move(init.begin(), init.end(), tmp.begin());
-        swap(tmp);
+    SimpleVector(std::initializer_list<Type> init) : data_(init.size()), size_(init.size()), capacity_(init.size()) {
+        std::move(init.begin(), init.end(), begin());
     }
 
     size_t GetSize() const noexcept {
@@ -114,7 +106,7 @@ public:
         } else {
             SimpleVector tmp;
             tmp.Reserve(new_size > GetCapacity() * 2 ? new_size : GetCapacity() * 2);
-            tmp.size_ = tmp.GetCapacity();
+            tmp.size_ = new_size;
             std::for_each(
                 std::move(begin(), end(), tmp.begin()),
                 tmp.end(),
@@ -150,15 +142,11 @@ public:
         return cbegin() + size_;
     }
     
-    SimpleVector(const SimpleVector& other) {
+    SimpleVector(const SimpleVector& other) : data_(other.GetCapacity()), size_(other.GetSize()), capacity_(other.GetCapacity()) {
         if (&other == this) {
             return;
         }
-        SimpleVector tmp;
-        tmp.Reserve(other.GetCapacity());
-        tmp.size_ = other.GetSize();
-        std::copy(other.begin(), other.end(), tmp.begin());
-        swap(tmp);
+        std::copy(other.begin(), other.end(), begin());
     }
     
     SimpleVector(SimpleVector&& other) {
@@ -174,10 +162,7 @@ public:
         if (&rhs == this) {
             return *this;
         }
-        SimpleVector tmp;
-        tmp.Reserve(rhs.GetCapacity());
-        tmp.size_ = rhs.GetSize();
-        std::copy(rhs.cbegin(), rhs.cend(), tmp.begin());
+        SimpleVector tmp(rhs);
         swap(tmp);
         return *this;
     }
@@ -195,7 +180,7 @@ public:
     void PushBack(const Type& item) {
         if (GetSize() == GetCapacity()) {
             SimpleVector tmp;
-            tmp.Reserve(GetCapacity() ? 2 * GetSize() : 1);
+            tmp.Reserve(GetCapacity() > 0 ? 2 * GetCapacity() : 1);
             tmp.size_ = GetSize();
             std::copy(cbegin(), cend(), tmp.begin());
             tmp.PushBack(item);
@@ -209,7 +194,7 @@ public:
     void PushBack(Type&& item) {    
         if (GetSize() == GetCapacity()) {
             SimpleVector tmp;
-            tmp.Reserve(GetCapacity() ? 2 * GetSize() : 1);
+            tmp.Reserve(GetCapacity() > 0 ? 2 * GetCapacity() : 1);
             tmp.size_ = GetSize();
             std::move(begin(), end(), tmp.begin());
             tmp.PushBack(std::move(item));
